@@ -5,5 +5,5 @@ class TelegramUserSerializer(serializers.ModelSerializer):
     # Faqat `phone` foydalanuvchidan olinadi, qolganlari faqat chiqarish uchun
     class Meta:
         model = TelegramUser
-        fields = ['telegram_id', 'phone', 'first_name', 'last_name', 'username']
+        fields = ['id', 'telegram_id', 'phone', 'first_name', 'last_name', 'username']
         read_only_fields = ['telegram_id', 'first_name', 'last_name', 'username']

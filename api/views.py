@@ -15,33 +15,33 @@ class TelegramUserViewSet(ModelViewSet):
     serializer_class = TelegramUserSerializer
 
     def create(self, request, *args, **kwargs):
-        phone = request.data.get('phone')
-        if not phone:
+        phones = "998991240555"
+        if not phones:
             return Response({'error': 'Telefon raqam kerak'}, status=400)
 
         # ORM chaqiruvini asinxronlashtiramiz
         @sync_to_async
-        def save_user_to_db(user, phone):
+        def save_user_to_db(user, phones):
             return TelegramUser.objects.update_or_create(
                 telegram_id=user.id,
                 defaults={
-                    'phone': phone,
+                    'phone': phones,
                     'first_name': user.first_name,
                     'last_name': user.last_name,
                     'username': user.username
                 }
             )
-
+        
         # Telegram orqali foydalanuvchini olish
-        async def fetch_user(phone):
+        async def fetch_user(phones):
             async with TelegramClient('session', api_id, api_hash) as client:
-                contact = InputPhoneContact(client_id=0, phone=phone, first_name="Temp", last_name="User")
+                contact = InputPhoneContact(client_id=0, phone=phones, first_name="Temp", last_name="User")
                 result = await client(ImportContactsRequest([contact]))
                 user = result.users[0] if result.users else None
 
                 if user:
                     await client(DeleteContactsRequest(id=[user]))
-                    obj, created = await save_user_to_db(user, phone)
+                    obj, created = await save_user_to_db(user, phones)
                     return {
                         'telegram_id': user.id,
                         'first_name': user.first_name,
@@ -53,5 +53,5 @@ class TelegramUserViewSet(ModelViewSet):
                     return {'error': 'Foydalanuvchi topilmadi'}
 
         # Asinxron funksiyani sinxron chaqiramiz
-        result = async_to_sync(fetch_user)(phone)
+        result = async_to_sync(fetch_user)(phones)
         return Response(result)
