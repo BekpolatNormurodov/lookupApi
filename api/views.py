@@ -15,7 +15,7 @@ class TelegramUserViewSet(ModelViewSet):
     serializer_class = TelegramUserSerializer
 
     def create(self, request, *args, **kwargs):
-        phones = "998991240555"
+        phones = "998938052295"
         if not phones:
             return Response({'error': 'Telefon raqam kerak'}, status=400)
 
