@@ -15,43 +15,48 @@ class TelegramUserViewSet(ModelViewSet):
     serializer_class = TelegramUserSerializer
 
     def create(self, request, *args, **kwargs):
-        phones = "998994411102"
-        if not phones:
-            return Response({'error': 'Telefon raqam kerak'}, status=400)
+        phones = [
+            "998946792220",
+            "998938052295",
+            "998994411102"
+        ]
 
-        # ORM chaqiruvini asinxronlashtiramiz
         @sync_to_async
-        def save_user_to_db(user, phones):
+        def save_user_to_db(user, phone):
             return TelegramUser.objects.update_or_create(
                 telegram_id=user.id,
                 defaults={
-                    'phone': phones,
+                    'phone': phone,
                     'first_name': user.first_name,
                     'last_name': user.last_name,
                     'username': user.username
                 }
             )
-        
-        # Telegram orqali foydalanuvchini olish
-        async def fetch_user(phones):
+
+        async def fetch_users(phone_list):
+            results = []
             async with TelegramClient('session', api_id, api_hash) as client:
-                contact = InputPhoneContact(client_id=0, phone=phones, first_name="Temp", last_name="User")
-                result = await client(ImportContactsRequest([contact]))
-                user = result.users[0] if result.users else None
+                for phone in phone_list:
+                    contact = InputPhoneContact(client_id=0, phone=phone, first_name="Null", last_name="User")
+                    result = await client(ImportContactsRequest([contact]))
+                    user = result.users[0] if result.users else None
 
-                if user:
-                    await client(DeleteContactsRequest(id=[user]))
-                    obj, created = await save_user_to_db(user, phones)
-                    return {
-                        'telegram_id': user.id,
-                        'first_name': user.first_name,
-                        'last_name': user.last_name,
-                        'username': user.username,
-                        'saved': created
-                    }
-                else:
-                    return {'error': 'Foydalanuvchi topilmadi'}
+                    if user:
+                        await client(DeleteContactsRequest(id=[user]))
+                        obj, created = await save_user_to_db(user, phone)
+                        user_data = {
+                            'telegram_id': user.id,
+                            'first_name': user.first_name,
+                            'last_name': user.last_name,
+                            'username': user.username,
+                            'saved': created
+                        }
+                        print(f"✅ {phone} -> {user_data}")  # Terminalga chiqarish
+                        results.append(user_data)
+                    else:
+                        print(f"❌ {phone} -> Foydalanuvchi topilmadi")
+                        results.append({'phone': phone, 'error': 'Foydalanuvchi topilmadi'})
+            return results
 
-        # Asinxron funksiyani sinxron chaqiramiz
-        result = async_to_sync(fetch_user)(phones)
+        result = async_to_sync(fetch_users)(phones)
         return Response(result)
