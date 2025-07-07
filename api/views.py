@@ -15,7 +15,6 @@ from api.serializers import TelegramUserSerializer
 api_id = 20727573
 api_hash = '4d677f4474803f0e54c378ff138aa3d8'
 
-
 class TelegramUserViewSet(ModelViewSet):
     queryset = TelegramUser.objects.all()
     serializer_class = TelegramUserSerializer
