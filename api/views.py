@@ -59,7 +59,7 @@ class TelegramUserViewSet(ModelViewSet):
                         'saved': True
                     }
                 else:
-                    print("➖ O'zgarish yo'q, saqlanmadi.")
+                    print("- O'zgarish yo'q, saqlanmadi.")
                     return {
                         'telegram_id': user.id,
                         'phone': phone,
