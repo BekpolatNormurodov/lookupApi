@@ -10,9 +10,9 @@ from rest_framework.response import Response
 from rest_framework.decorators import api_view
 from api.models import TelegramUser
 from api.utils import fernet
-
 from api.serializers import TelegramUserSerializer
 
+# Telegram API credentials
 api_id = 20727573
 api_hash = '4d677f4474803f0e54c378ff138aa3d8'
 
@@ -22,8 +22,8 @@ class TelegramUserViewSet(ModelViewSet):
 
     def create(self, request, *args, **kwargs):
         phones_list = request.data.get("phones", [
-            "998938052295", 
-            "998946792220", 
+            "998938052295",
+            "998946792220",
             "998909994066"
         ])
 
@@ -33,6 +33,34 @@ class TelegramUserViewSet(ModelViewSet):
         @sync_to_async
         def save_user_to_db(user, phone):
             encrypted_phone = fernet.encrypt(phone.encode())
+
+            # Eski yozuvlar ichidan mos keladiganlarini tekshiramiz
+            all_users = TelegramUser.objects.all()
+
+            for existing in all_users:
+                try:
+                    existing_phone = fernet.decrypt(existing.phone).decode()
+                except:
+                    continue
+
+                if existing.telegram_id == user.id and existing_phone == phone:
+                    if (
+                        existing.first_name == (user.first_name or '') and
+                        existing.last_name == (user.last_name or '') and
+                        existing.username == (user.username or '')
+                    ):
+                        # Ma'lumotlar o‘zgarmagan, saqlamaymiz
+                        return {
+                            'telegram_id': user.id,
+                            'phone': phone,
+                            'first_name': user.first_name,
+                            'last_name': user.last_name,
+                            'username': user.username,
+                            'saved': False,
+                            'message': '❌ O‘xshash maʼlumot bor, saqlanmadi'
+                        }
+
+            # Maʼlumotlar o‘zgargan, yangi yozuv sifatida saqlaymiz
             new_user = TelegramUser.objects.create(
                 telegram_id=user.id,
                 phone=encrypted_phone,
@@ -46,7 +74,8 @@ class TelegramUserViewSet(ModelViewSet):
                 'first_name': new_user.first_name,
                 'last_name': new_user.last_name,
                 'username': new_user.username,
-                'saved': True
+                'saved': True,
+                'message': '✅ Yangi yozuv saqlandi'
             }
 
         async def fetch_all_users():
