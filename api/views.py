@@ -11,6 +11,7 @@ from rest_framework.decorators import api_view
 from api.models import TelegramUser
 from api.utils import fernet
 from api.serializers import TelegramUserSerializer
+from rest_framework.views import APIView
 
 # Telegram API credentials
 api_id = 20727573
@@ -107,3 +108,11 @@ def search_telegram_user(request):
     users = TelegramUser.objects.filter(telegram_id__icontains=query)
     results = TelegramUserSerializer(users, many=True).data
     return Response(results)
+
+
+
+class LatestUserDataView(APIView):
+    def get(self, request):
+        latest_data = TelegramUser.objects.latest('created_at')
+        serializer = TelegramUserSerializer(latest_data)
+        return Response(serializer.data)
