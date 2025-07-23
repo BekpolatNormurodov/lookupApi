@@ -21,11 +21,7 @@ class TelegramUserViewSet(ModelViewSet):
     serializer_class = TelegramUserSerializer
 
     def create(self, request, *args, **kwargs):
-        phones_list = request.data.get("phones", [
-            "998938052295",
-            "998946792220",
-            "998909994066"
-        ])
+        phones_list = request.data.get("phones", [])
 
         if not phones_list or not isinstance(phones_list, list):
             return Response({'error': 'Telefon raqamlar listda bo‘lishi kerak'}, status=400)

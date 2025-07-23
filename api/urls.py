@@ -8,5 +8,4 @@ urlpatterns = [
 ]
 router = routers.SimpleRouter()
 router.register('', TelegramUserViewSet, basename='telegramuser')
-
 urlpatterns += router.urls
