@@ -13,9 +13,9 @@ from api.utils import fernet
 from api.serializers import TelegramUserSerializer
 from rest_framework.views import APIView
 
-# Telegram API credentials
-api_id = 20727573
-api_hash = '4d677f4474803f0e54c378ff138aa3d8'
+# User 1 => (88) 977-39-61
+api_id = 26106729
+api_hash = 'bb13221ab81b637a7a8a23caec2af078'
 
 class TelegramUserViewSet(ModelViewSet):
     queryset = TelegramUser.objects.all()
