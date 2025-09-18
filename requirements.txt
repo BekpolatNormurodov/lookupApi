@@ -4,3 +4,4 @@ djangorestframework==3.16.0
 sqlparse==0.5.3
 telethon==1.41.2
 tzdata==2025.2
+cryptography==46.0.1
