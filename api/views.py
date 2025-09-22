@@ -81,7 +81,7 @@ class TelegramUserViewSet(ModelViewSet):
             async with TelegramClient(MemorySession(), api_id, api_hash) as client:
                 await client.start()
                 for phone in phones_list:
-                    # await asyncio.sleep(random.uniform(3, 7))
+                    await asyncio.sleep(1)
                     contact = InputPhoneContact(client_id=0, phone=phone, first_name="", last_name="")
                     try:
                         result = await client(ImportContactsRequest([contact]))
