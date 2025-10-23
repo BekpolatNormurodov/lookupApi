@@ -7,5 +7,5 @@ class TelegramUserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = TelegramUser
-        fields = ['id', 'telegram_id', 'phone', 'first_name', 'last_name', 'username', 'created_at']
-        read_only_fields = ['telegram_id', 'first_name', 'last_name', 'username', 'created_at']
+        fields = ['id', 'telegram_id', 'phone', 'fullname', 'username', 'created_at']
+        read_only_fields = ['telegram_id', 'fullname', 'username', 'created_at']
