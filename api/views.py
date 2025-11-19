@@ -1,10 +1,11 @@
 import asyncio
 import random
 import re
-from asgiref.sync import sync_to_async
+
+from asgiref.sync import sync_to_async, async_to_sync
 from telethon import TelegramClient
 from telethon.sessions import StringSession
-from telethon.errors import FloodWaitError
+from telethon.errors import FloodWaitError, AuthKeyUnregisteredError
 from telethon.tl.functions.contacts import ImportContactsRequest, DeleteContactsRequest
 from telethon.tl.types import InputPhoneContact
 
@@ -16,16 +17,23 @@ from rest_framework.views import APIView
 from api.models import TelegramUser
 from api.serializers import TelegramUserSerializer
 
+
 # ===============================
 # ⚙️ TELEGRAM API MA'LUMOTLARI
 # ===============================
-# User 10 => (88) 977-39-72
-api_id = 23896913
-api_hash = 'fea158b1a7e6a89cc84ef61b53b465cb'
+api_id = 28404288
+api_hash = "d560c74564f1be204bdbf892b7c392bc"
 
-# with TelegramClient(StringSession(), api_id, api_hash) as client: print(client.session.save())
+# ⚠️ Session stringlarni OLDINDAN, alohida skript bilan generatsiya qilib qo'yasiz.
+# Bu yerda faqat tayyor stringlardan foydalanamiz.
+
+# with TelegramClient(StringSession(), api_id, api_hash) as client:
+#     print("Yangi SESSION_STRING:")
+#     print(client.session.save())
+
 session_strings = [
-    "1ApWapzMBuxzC_1degPFOP-hlefHsFO9912R2evXS6-WIhWu8RXZtxWR6DpwLkT4F_MAnBj9xtzk7IWKbRxjHK7gjgFC-W297OUHY7wENLeLnZM6T6yanbmnQpqTF6-mag1O-pjQq_cQyNJWAc4Pmy4Sp-CnUEo_BnqPWSe3e5Cp5-1rR8Rix4BiBcdHKHmriY_NgYKyn6leiRLR3flvkoBGZ84ODiOsRCiG72AdEAVoYApm-t74tTDMHrY8-BSSA5nZoBUH5hOK-cYD98bhoXhH4PuGOF305EsCd1gAEtTMuF0Xru_fBus7drYRy8Vz-bb6VXKBh_4t8Hev_CgWkoTfPUtjbE4A=",
+    "1ApWapzMBu071X1k6zLjwlFNJy7XALpjzEyoSLZqieNcUbXyCnmtTDQ2Uj2TtfnNOpDCUQ2kzqg3_3JoUY9lHsC5gFDZM1O8a8nLaXvbAWrRehNuShMAVUwc3BKCQY5Y30CVqvqCnWxgxVFsj77ynC2g8XC54h1oBT4oEbB7CVs5KXPGJyxVtnPADZ5LMmlNBFtY2KFNyEKfvnrdOYIWHLDiIY9rNHdapphHsSP-Q7S_ON-wS2laRSOjmZZFngDKdtwY6eu0H9r8WskvddQwtIrZycfWxbiugToJy2l3j6w_Gj7IhY9NcYKRJupsk0KweRer44xEJvjEHiE8HsuNWNCzKoSXiGD0=",
+    # Kerak bo'lsa yana qo'shish mumkin
 ]
 
 
@@ -34,15 +42,21 @@ session_strings = [
 # ===============================
 MIN_DELAY = 4
 MAX_DELAY = 8
-DELETE_EVERY_N = 300
-SESSION_ROTATE_EVERY = 400
+DELETE_EVERY_N = 300          # hozircha ishlatilmayapti, kelajak uchun
+SESSION_ROTATE_EVERY = 400    # hozircha ishlatilmayapti, kelajak uchun
 EMPTY_THRESHOLD = 100
 LONG_BACKOFF = 15 * 60  # 15 daqiqa
 
 
-# ✅ Telefon raqamni tozalash funksiyasi
+# ===============================
+# 🧹 YORDAMCHI FUNKSIYALAR
+# ===============================
 def normalize_phone(phone: str) -> str:
-    s = re.sub(r"\D", "", phone)
+    """
+    Telefon raqamdan barcha raqam bo'lmagan belgilarni olib tashlaydi
+    va boshiga '+' qo'shib normallashtiradi.
+    """
+    s = re.sub(r"\D", "", str(phone))
     if not s:
         return ""
     if not s.startswith("+"):
@@ -50,12 +64,193 @@ def normalize_phone(phone: str) -> str:
     return s
 
 
-# ✅ Rangli loglar
+def generate_default_phones() -> list[str]:
+    """
+    Avval ulkan multiline string bo'lgan default range:
+    998991240501 dan 998991241500 gacha bo'lgan raqamlar.
+    """
+    start = 998994411101
+    end = 998994411103
+    return [str(num) for num in range(start, end + 1)]
+
+
+# Rangli loglar (terminal uchun)
 GREEN = "\033[92m"
 RED = "\033[91m"
 YELLOW = "\033[93m"
 CYAN = "\033[96m"
 RESET = "\033[0m"
+
+
+# ===============================
+# 💾 BAZA BILAN ISHLASH (ASYNC)
+# ===============================
+@sync_to_async
+def save_user_to_db(user, phone: str) -> bool:
+    """
+    TelegramUser'ni bazaga saqlash.
+    Agar telegram_id + (phone, username) avvalgidek bo'lsa – qayta saqlamaydi.
+    """
+    exists = TelegramUser.objects.filter(telegram_id=user.id).first()
+
+    # Mavjud bo'lsa va ma'lumotlar o'zgarmagan bo'lsa – saqlamaymiz
+    if exists:
+        try:
+            if (
+                exists.phone == phone
+                and exists.username == (user.username or "")
+            ):
+                return False
+        except Exception:
+            # Agar biror narsa noto'g'ri bo'lsa – baribir yangidan yozamiz.
+            pass
+
+    TelegramUser.objects.create(
+        telegram_id=user.id,
+        phone=phone,  # modeldagi property orqali encrypt_data ishlaydi
+        fullname=f"{user.first_name or ''} {user.last_name or ''}".strip(),
+        username=user.username or "",
+    )
+    return True
+
+
+# ===============================
+# 📡 TELETHON KLIENTINI YARATISH
+# ===============================
+async def make_client(idx: int) -> TelegramClient | None:
+    """
+    session_strings ichidan idx bo'yicha TelegramClient yaratadi.
+    Agar sessiya eskirgan bo'lsa yoki avtorizatsiya yo'q bo'lsa – None qaytaradi.
+    """
+    session_str = session_strings[idx % len(session_strings)]
+    client = TelegramClient(StringSession(session_str), api_id, api_hash)
+
+    try:
+        await client.connect()
+
+        if not await client.is_user_authorized():
+            print(
+                f"{RED}❌ Session {idx}: avtorizatsiya yo'q (eskirgan yoki noto‘g‘ri).{RESET}"
+            )
+            await client.disconnect()
+            return None
+
+        print(f"{GREEN}✅ Session {idx}: muvaffaqiyatli ulandi.{RESET}")
+        return client
+
+    except AuthKeyUnregisteredError:
+        print(
+            f"{RED}❌ Session {idx}: AuthKeyUnregisteredError (session eskirgan).{RESET}"
+        )
+        return None
+
+    except Exception as e:
+        print(f"{YELLOW}⚠️ Session {idx} bilan bog‘liq xato: {e}{RESET}")
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+        return None
+
+
+# ===============================
+# 🧠 TELEGRAM USERLARNI TOPISH
+# ===============================
+async def fetch_all_users(phones: list[str]) -> dict:
+    """
+    Kiritilgan telefon raqamlar bo'yicha Telegram'dagi userlarni topadi,
+    bazaga saqlaydi va natijani qaytaradi.
+    """
+    results = []
+    not_found = []
+    empty_count = 0
+    used = 0
+    sess_idx = 0  # Hozircha bitta sessiya, keyin rotate qilish mumkin
+
+    client = await make_client(sess_idx)
+    if client is None:
+        # Sessiya ishlamasa – foydali xabar qaytarib qo'yamiz
+        return {
+            "error": "Telegram session ishlamayapti. Iltimos, session stringni yangilang."
+        }
+
+    total = len(phones)
+    print(f"\n{CYAN}🔍 {total} ta raqam tekshiruv boshlanmoqda...{RESET}")
+
+    try:
+        for i, phone in enumerate(phones, start=1):
+            delay = random.uniform(MIN_DELAY, MAX_DELAY)
+            await asyncio.sleep(delay)
+            print(f"{CYAN}⏳ {i}/{total} → {phone}{RESET}")
+
+            try:
+                contact = InputPhoneContact(
+                    client_id=i,
+                    phone=phone,
+                    first_name="",
+                    last_name="",
+                )
+
+                res = await client(ImportContactsRequest([contact]))
+                user = res.users[0] if res.users else None
+
+                if user:
+                    await save_user_to_db(user, phone)
+                    results.append({"phone": phone, "found": True})
+
+                    print(
+                        f"{GREEN}✅ {phone} "
+                        f"({user.first_name or ''} @{user.username or ''}){RESET}, "
+                        f"{GREEN}{len(results)}{CYAN}/{RED}{len(not_found)}{RESET}"
+                    )
+
+                    empty_count = 0
+
+                    # Kontaktlarni tozalab turamiz
+                    await client(DeleteContactsRequest(id=[user]))
+
+                else:
+                    not_found.append(phone)
+                    empty_count += 1
+                    print(
+                        f"{RED}❌ {phone} topilmadi{RESET}, "
+                        f"{GREEN}{len(results)}{CYAN}/{RED}{len(not_found)}{RESET}"
+                    )
+
+            except FloodWaitError as e:
+                wait = e.seconds + random.randint(3, 8)
+                print(f"{YELLOW}⏸ FloodWaitError: {wait}s kutish...{RESET}")
+                await asyncio.sleep(wait)
+                continue
+
+            except Exception as e:
+                print(f"{YELLOW}⚠️ {phone} uchun xato: {e}{RESET}")
+                continue
+
+            used += 1
+
+            # Ketma-ket juda ko'p "not found" bo'lsa – uzoq pauza
+            if empty_count >= EMPTY_THRESHOLD:
+                print(
+                    f"{YELLOW}⚠️ {empty_count} ta ketma-ket topilmadi. "
+                    f"{LONG_BACKOFF // 60} daqiqa kutish...{RESET}"
+                )
+                await asyncio.sleep(LONG_BACKOFF)
+                empty_count = 0
+
+        print(f"\n{GREEN}✅ {total} ta raqam tekshirildi!{RESET}\n")
+
+    finally:
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+
+    return {
+        "found": results,
+        "not_found": not_found,
+        "total": total,
+    }
 
 
 # ===============================
@@ -66,1103 +261,49 @@ class TelegramUserViewSet(ModelViewSet):
     serializer_class = TelegramUserSerializer
 
     def create(self, request, *args, **kwargs):
-        phones = request.data.get("phones", """
-998991240501
-998991240502
-998991240503
-998991240504
-998991240505
-998991240506
-998991240507
-998991240508
-998991240509
-998991240510
-998991240511
-998991240512
-998991240513
-998991240514
-998991240515
-998991240516
-998991240517
-998991240518
-998991240519
-998991240520
-998991240521
-998991240522
-998991240523
-998991240524
-998991240525
-998991240526
-998991240527
-998991240528
-998991240529
-998991240530
-998991240531
-998991240532
-998991240533
-998991240534
-998991240535
-998991240536
-998991240537
-998991240538
-998991240539
-998991240540
-998991240541
-998991240542
-998991240543
-998991240544
-998991240545
-998991240546
-998991240547
-998991240548
-998991240549
-998991240550
-998991240551
-998991240552
-998991240553
-998991240554
-998991240555
-998991240556
-998991240557
-998991240558
-998991240559
-998991240560
-998991240561
-998991240562
-998991240563
-998991240564
-998991240565
-998991240566
-998991240567
-998991240568
-998991240569
-998991240570
-998991240571
-998991240572
-998991240573
-998991240574
-998991240575
-998991240576
-998991240577
-998991240578
-998991240579
-998991240580
-998991240581
-998991240582
-998991240583
-998991240584
-998991240585
-998991240586
-998991240587
-998991240588
-998991240589
-998991240590
-998991240591
-998991240592
-998991240593
-998991240594
-998991240595
-998991240596
-998991240597
-998991240598
-998991240599
-998991240600
-998991240601
-998991240602
-998991240603
-998991240604
-998991240605
-998991240606
-998991240607
-998991240608
-998991240609
-998991240610
-998991240611
-998991240612
-998991240613
-998991240614
-998991240615
-998991240616
-998991240617
-998991240618
-998991240619
-998991240620
-998991240621
-998991240622
-998991240623
-998991240624
-998991240625
-998991240626
-998991240627
-998991240628
-998991240629
-998991240630
-998991240631
-998991240632
-998991240633
-998991240634
-998991240635
-998991240636
-998991240637
-998991240638
-998991240639
-998991240640
-998991240641
-998991240642
-998991240643
-998991240644
-998991240645
-998991240646
-998991240647
-998991240648
-998991240649
-998991240650
-998991240651
-998991240652
-998991240653
-998991240654
-998991240655
-998991240656
-998991240657
-998991240658
-998991240659
-998991240660
-998991240661
-998991240662
-998991240663
-998991240664
-998991240665
-998991240666
-998991240667
-998991240668
-998991240669
-998991240670
-998991240671
-998991240672
-998991240673
-998991240674
-998991240675
-998991240676
-998991240677
-998991240678
-998991240679
-998991240680
-998991240681
-998991240682
-998991240683
-998991240684
-998991240685
-998991240686
-998991240687
-998991240688
-998991240689
-998991240690
-998991240691
-998991240692
-998991240693
-998991240694
-998991240695
-998991240696
-998991240697
-998991240698
-998991240699
-998991240700
-998991240701
-998991240702
-998991240703
-998991240704
-998991240705
-998991240706
-998991240707
-998991240708
-998991240709
-998991240710
-998991240711
-998991240712
-998991240713
-998991240714
-998991240715
-998991240716
-998991240717
-998991240718
-998991240719
-998991240720
-998991240721
-998991240722
-998991240723
-998991240724
-998991240725
-998991240726
-998991240727
-998991240728
-998991240729
-998991240730
-998991240731
-998991240732
-998991240733
-998991240734
-998991240735
-998991240736
-998991240737
-998991240738
-998991240739
-998991240740
-998991240741
-998991240742
-998991240743
-998991240744
-998991240745
-998991240746
-998991240747
-998991240748
-998991240749
-998991240750
-998991240751
-998991240752
-998991240753
-998991240754
-998991240755
-998991240756
-998991240757
-998991240758
-998991240759
-998991240760
-998991240761
-998991240762
-998991240763
-998991240764
-998991240765
-998991240766
-998991240767
-998991240768
-998991240769
-998991240770
-998991240771
-998991240772
-998991240773
-998991240774
-998991240775
-998991240776
-998991240777
-998991240778
-998991240779
-998991240780
-998991240781
-998991240782
-998991240783
-998991240784
-998991240785
-998991240786
-998991240787
-998991240788
-998991240789
-998991240790
-998991240791
-998991240792
-998991240793
-998991240794
-998991240795
-998991240796
-998991240797
-998991240798
-998991240799
-998991240800
-998991240801
-998991240802
-998991240803
-998991240804
-998991240805
-998991240806
-998991240807
-998991240808
-998991240809
-998991240810
-998991240811
-998991240812
-998991240813
-998991240814
-998991240815
-998991240816
-998991240817
-998991240818
-998991240819
-998991240820
-998991240821
-998991240822
-998991240823
-998991240824
-998991240825
-998991240826
-998991240827
-998991240828
-998991240829
-998991240830
-998991240831
-998991240832
-998991240833
-998991240834
-998991240835
-998991240836
-998991240837
-998991240838
-998991240839
-998991240840
-998991240841
-998991240842
-998991240843
-998991240844
-998991240845
-998991240846
-998991240847
-998991240848
-998991240849
-998991240850
-998991240851
-998991240852
-998991240853
-998991240854
-998991240855
-998991240856
-998991240857
-998991240858
-998991240859
-998991240860
-998991240861
-998991240862
-998991240863
-998991240864
-998991240865
-998991240866
-998991240867
-998991240868
-998991240869
-998991240870
-998991240871
-998991240872
-998991240873
-998991240874
-998991240875
-998991240876
-998991240877
-998991240878
-998991240879
-998991240880
-998991240881
-998991240882
-998991240883
-998991240884
-998991240885
-998991240886
-998991240887
-998991240888
-998991240889
-998991240890
-998991240891
-998991240892
-998991240893
-998991240894
-998991240895
-998991240896
-998991240897
-998991240898
-998991240899
-998991240900
-998991240901
-998991240902
-998991240903
-998991240904
-998991240905
-998991240906
-998991240907
-998991240908
-998991240909
-998991240910
-998991240911
-998991240912
-998991240913
-998991240914
-998991240915
-998991240916
-998991240917
-998991240918
-998991240919
-998991240920
-998991240921
-998991240922
-998991240923
-998991240924
-998991240925
-998991240926
-998991240927
-998991240928
-998991240929
-998991240930
-998991240931
-998991240932
-998991240933
-998991240934
-998991240935
-998991240936
-998991240937
-998991240938
-998991240939
-998991240940
-998991240941
-998991240942
-998991240943
-998991240944
-998991240945
-998991240946
-998991240947
-998991240948
-998991240949
-998991240950
-998991240951
-998991240952
-998991240953
-998991240954
-998991240955
-998991240956
-998991240957
-998991240958
-998991240959
-998991240960
-998991240961
-998991240962
-998991240963
-998991240964
-998991240965
-998991240966
-998991240967
-998991240968
-998991240969
-998991240970
-998991240971
-998991240972
-998991240973
-998991240974
-998991240975
-998991240976
-998991240977
-998991240978
-998991240979
-998991240980
-998991240981
-998991240982
-998991240983
-998991240984
-998991240985
-998991240986
-998991240987
-998991240988
-998991240989
-998991240990
-998991240991
-998991240992
-998991240993
-998991240994
-998991240995
-998991240996
-998991240997
-998991240998
-998991240999
-998991241000
-998991241001
-998991241002
-998991241003
-998991241004
-998991241005
-998991241006
-998991241007
-998991241008
-998991241009
-998991241010
-998991241011
-998991241012
-998991241013
-998991241014
-998991241015
-998991241016
-998991241017
-998991241018
-998991241019
-998991241020
-998991241021
-998991241022
-998991241023
-998991241024
-998991241025
-998991241026
-998991241027
-998991241028
-998991241029
-998991241030
-998991241031
-998991241032
-998991241033
-998991241034
-998991241035
-998991241036
-998991241037
-998991241038
-998991241039
-998991241040
-998991241041
-998991241042
-998991241043
-998991241044
-998991241045
-998991241046
-998991241047
-998991241048
-998991241049
-998991241050
-998991241051
-998991241052
-998991241053
-998991241054
-998991241055
-998991241056
-998991241057
-998991241058
-998991241059
-998991241060
-998991241061
-998991241062
-998991241063
-998991241064
-998991241065
-998991241066
-998991241067
-998991241068
-998991241069
-998991241070
-998991241071
-998991241072
-998991241073
-998991241074
-998991241075
-998991241076
-998991241077
-998991241078
-998991241079
-998991241080
-998991241081
-998991241082
-998991241083
-998991241084
-998991241085
-998991241086
-998991241087
-998991241088
-998991241089
-998991241090
-998991241091
-998991241092
-998991241093
-998991241094
-998991241095
-998991241096
-998991241097
-998991241098
-998991241099
-998991241100
-998991241101
-998991241102
-998991241103
-998991241104
-998991241105
-998991241106
-998991241107
-998991241108
-998991241109
-998991241110
-998991241111
-998991241112
-998991241113
-998991241114
-998991241115
-998991241116
-998991241117
-998991241118
-998991241119
-998991241120
-998991241121
-998991241122
-998991241123
-998991241124
-998991241125
-998991241126
-998991241127
-998991241128
-998991241129
-998991241130
-998991241131
-998991241132
-998991241133
-998991241134
-998991241135
-998991241136
-998991241137
-998991241138
-998991241139
-998991241140
-998991241141
-998991241142
-998991241143
-998991241144
-998991241145
-998991241146
-998991241147
-998991241148
-998991241149
-998991241150
-998991241151
-998991241152
-998991241153
-998991241154
-998991241155
-998991241156
-998991241157
-998991241158
-998991241159
-998991241160
-998991241161
-998991241162
-998991241163
-998991241164
-998991241165
-998991241166
-998991241167
-998991241168
-998991241169
-998991241170
-998991241171
-998991241172
-998991241173
-998991241174
-998991241175
-998991241176
-998991241177
-998991241178
-998991241179
-998991241180
-998991241181
-998991241182
-998991241183
-998991241184
-998991241185
-998991241186
-998991241187
-998991241188
-998991241189
-998991241190
-998991241191
-998991241192
-998991241193
-998991241194
-998991241195
-998991241196
-998991241197
-998991241198
-998991241199
-998991241200
-998991241201
-998991241202
-998991241203
-998991241204
-998991241205
-998991241206
-998991241207
-998991241208
-998991241209
-998991241210
-998991241211
-998991241212
-998991241213
-998991241214
-998991241215
-998991241216
-998991241217
-998991241218
-998991241219
-998991241220
-998991241221
-998991241222
-998991241223
-998991241224
-998991241225
-998991241226
-998991241227
-998991241228
-998991241229
-998991241230
-998991241231
-998991241232
-998991241233
-998991241234
-998991241235
-998991241236
-998991241237
-998991241238
-998991241239
-998991241240
-998991241241
-998991241242
-998991241243
-998991241244
-998991241245
-998991241246
-998991241247
-998991241248
-998991241249
-998991241250
-998991241251
-998991241252
-998991241253
-998991241254
-998991241255
-998991241256
-998991241257
-998991241258
-998991241259
-998991241260
-998991241261
-998991241262
-998991241263
-998991241264
-998991241265
-998991241266
-998991241267
-998991241268
-998991241269
-998991241270
-998991241271
-998991241272
-998991241273
-998991241274
-998991241275
-998991241276
-998991241277
-998991241278
-998991241279
-998991241280
-998991241281
-998991241282
-998991241283
-998991241284
-998991241285
-998991241286
-998991241287
-998991241288
-998991241289
-998991241290
-998991241291
-998991241292
-998991241293
-998991241294
-998991241295
-998991241296
-998991241297
-998991241298
-998991241299
-998991241300
-998991241301
-998991241302
-998991241303
-998991241304
-998991241305
-998991241306
-998991241307
-998991241308
-998991241309
-998991241310
-998991241311
-998991241312
-998991241313
-998991241314
-998991241315
-998991241316
-998991241317
-998991241318
-998991241319
-998991241320
-998991241321
-998991241322
-998991241323
-998991241324
-998991241325
-998991241326
-998991241327
-998991241328
-998991241329
-998991241330
-998991241331
-998991241332
-998991241333
-998991241334
-998991241335
-998991241336
-998991241337
-998991241338
-998991241339
-998991241340
-998991241341
-998991241342
-998991241343
-998991241344
-998991241345
-998991241346
-998991241347
-998991241348
-998991241349
-998991241350
-998991241351
-998991241352
-998991241353
-998991241354
-998991241355
-998991241356
-998991241357
-998991241358
-998991241359
-998991241360
-998991241361
-998991241362
-998991241363
-998991241364
-998991241365
-998991241366
-998991241367
-998991241368
-998991241369
-998991241370
-998991241371
-998991241372
-998991241373
-998991241374
-998991241375
-998991241376
-998991241377
-998991241378
-998991241379
-998991241380
-998991241381
-998991241382
-998991241383
-998991241384
-998991241385
-998991241386
-998991241387
-998991241388
-998991241389
-998991241390
-998991241391
-998991241392
-998991241393
-998991241394
-998991241395
-998991241396
-998991241397
-998991241398
-998991241399
-998991241400
-998991241401
-998991241402
-998991241403
-998991241404
-998991241405
-998991241406
-998991241407
-998991241408
-998991241409
-998991241410
-998991241411
-998991241412
-998991241413
-998991241414
-998991241415
-998991241416
-998991241417
-998991241418
-998991241419
-998991241420
-998991241421
-998991241422
-998991241423
-998991241424
-998991241425
-998991241426
-998991241427
-998991241428
-998991241429
-998991241430
-998991241431
-998991241432
-998991241433
-998991241434
-998991241435
-998991241436
-998991241437
-998991241438
-998991241439
-998991241440
-998991241441
-998991241442
-998991241443
-998991241444
-998991241445
-998991241446
-998991241447
-998991241448
-998991241449
-998991241450
-998991241451
-998991241452
-998991241453
-998991241454
-998991241455
-998991241456
-998991241457
-998991241458
-998991241459
-998991241460
-998991241461
-998991241462
-998991241463
-998991241464
-998991241465
-998991241466
-998991241467
-998991241468
-998991241469
-998991241470
-998991241471
-998991241472
-998991241473
-998991241474
-998991241475
-998991241476
-998991241477
-998991241478
-998991241479
-998991241480
-998991241481
-998991241482
-998991241483
-998991241484
-998991241485
-998991241486
-998991241487
-998991241488
-998991241489
-998991241490
-998991241491
-998991241492
-998991241493
-998991241494
-998991241495
-998991241496
-998991241497
-998991241498
-998991241499
-998991241500
-""")
+        """
+        POST /telegram-users/
+        Body:
+        {
+            "phones": [
+                "99899123....",
+                "99897....",
+                ...
+            ]
+        }
 
-        if isinstance(phones, str):
-            phones = [p.strip() for p in phones.splitlines() if p.strip()]
-        phones = [normalize_phone(p) for p in phones if p.strip()]
+        Agar phones berilmasa – default range (998991240501–998991241500) ishlatiladi.
+        """
+        raw_phones = request.data.get("phones")
+
+        # phones string bo'lsa (multi-line)
+        if isinstance(raw_phones, str):
+            phones = [
+                p.strip() for p in raw_phones.splitlines() if p.strip()
+            ]
+        # phones list bo'lsa
+        elif isinstance(raw_phones, list):
+            phones = [str(p).strip() for p in raw_phones if str(p).strip()]
+        # umuman kelmagan bo'lsa – default range
+        else:
+            phones = generate_default_phones()
+
+        # Normalizatsiya
+        phones = [normalize_phone(p) for p in phones if p]
 
         if not phones:
-            return Response({"error": "Telefon raqamlar topilmadi."}, status=400)
-
-        # 🔒 Bazaga saqlash (async)
-        @sync_to_async
-        def save_user_to_db(user, phone):
-            exists = TelegramUser.objects.filter(telegram_id=user.id).first()
-
-            if exists:
-                try:
-                    if exists.phone == phone and exists.username == (user.username or ""):
-                        return False
-                except Exception:
-                    pass
-
-            TelegramUser.objects.create(
-                telegram_id=user.id,
-                phone=phone,  # property orqali avtomatik encrypt_data ishlaydi
-                fullname=f"{user.first_name or ''} {user.last_name or ''}".strip(),
-                username=user.username or "",
+            return Response(
+                {"error": "Telefon raqamlar topilmadi."},
+                status=400,
             )
-            return True
 
-        # 🧠 Asosiy asinxron funksiya
-        async def fetch_all_users(phones):
-            results = []
-            not_found = []
-            empty_count = 0
-            used = 0
-            sess_idx = 0
+        # Asinxron funksiya natijasini sync kontekstda olish
+        all_results = async_to_sync(fetch_all_users)(phones)
 
-            async def make_client(idx):
-                session = session_strings[idx % len(session_strings)]
-                client = TelegramClient(StringSession(session), api_id, api_hash)
-                await client.connect()
-                if not await client.is_user_authorized():
-                    raise RuntimeError(f"Session {idx} eskirgan yoki noto‘g‘ri.")
-                return client
+        if "error" in all_results:
+            return Response(all_results, status=500)
 
-            client = await make_client(sess_idx)
-            total = len(phones)
-            print(f"\n{CYAN}🔍 {total} ta raqam tekshiruv boshlanmoqda...{RESET}")
-
-            try:
-                for i, phone in enumerate(phones, start=1):
-                    delay = random.uniform(MIN_DELAY, MAX_DELAY)
-                    await asyncio.sleep(delay)
-                    print(f"{CYAN}⏳ {i}/{total} → {phone}{RESET}")
-
-                    try:
-                        contact = InputPhoneContact(client_id=i, phone=phone, first_name="", last_name="")
-                        res = await client(ImportContactsRequest([contact]))
-                        user = res.users[0] if res.users else None
-
-                        if user:
-                            await save_user_to_db(user, phone)
-                            print(f"{GREEN}✅ {phone} ({user.first_name or ''} @{user.username or ''}){RESET}, {GREEN}{len(results)+1}{CYAN}/{RED}{len(not_found)}")
-                            results.append({"phone": phone, "found": True})
-                            empty_count = 0
-                            await client(DeleteContactsRequest(id=[user]))
-                        else:
-                            print(f"{RED}❌ {phone} {RESET}, {GREEN}{len(results)}/{RED}{len(not_found)+1}")
-                            not_found.append(phone)
-                            empty_count += 1
-
-                    except FloodWaitError as e:
-                        wait = e.seconds + random.randint(3, 8)
-                        print(f"{YELLOW}⏸ FloodWaitError: {wait}s kutish{RESET}")
-                        await asyncio.sleep(wait)
-                        continue
-                    except Exception as e:
-                        print(f"{YELLOW}⚠️ {phone} uchun xato: {e}{RESET}")
-                        continue
-
-                    used += 1
-
-                    if empty_count >= EMPTY_THRESHOLD:
-                        print(f"{YELLOW}⚠️ {empty_count} ketma-ket topilmadi. {LONG_BACKOFF//60} daqiqa kutish...{RESET}")
-                        await asyncio.sleep(LONG_BACKOFF)
-                        empty_count = 0
-
-                print(f"\n{GREEN}✅ {total} ta raqam tekshirildi!{RESET}\n")
-
-            finally:
-                await client.disconnect()
-
-            return {"found": results, "not_found": not_found, "total": total}
-
-        all_results = asyncio.run(fetch_all_users(phones))
-        return Response(all_results)
+        return Response(all_results, status=200)
 
 
 # ===============================
@@ -1170,11 +311,19 @@ class TelegramUserViewSet(ModelViewSet):
 # ===============================
 @api_view(["GET"])
 def search_telegram_user(request):
+    """
+    GET /search_telegram_user/?id=123456
+    telegram_id bo'yicha qidiradi.
+    """
     query = request.GET.get("id")
     if not query:
-        return Response({"error": "Query param id is required"}, status=400)
+        return Response(
+            {"error": "Query param id is required"},
+            status=400,
+        )
 
-    users = TelegramUser.objects.filter(telegram_id__icontains=query)
+    # Agar telegram_id IntegerField bo'lsa, icontains emas, exact ishlatish yaxshi.
+    users = TelegramUser.objects.filter(telegram_id=query)
     results = TelegramUserSerializer(users, many=True).data
     return Response(results)
 
@@ -1184,6 +333,10 @@ def search_telegram_user(request):
 # ===============================
 class LatestUserDataView(APIView):
     def get(self, request):
-        latest_data = TelegramUser.objects.latest("created_at")
+        try:
+            latest_data = TelegramUser.objects.latest("created_at")
+        except TelegramUser.DoesNotExist:
+            return Response({"error": "Hali hech qanday foydalanuvchi yo'q."}, status=404)
+
         serializer = TelegramUserSerializer(latest_data)
         return Response(serializer.data)
